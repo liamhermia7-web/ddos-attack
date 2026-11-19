@@ -66,18 +66,32 @@ html, body {
   position: absolute; right: 0; top: 22px; font-size: 0; opacity: 0;
 }
 
-/* ---------- progress cards ---------- */
+/* ---------- progress cards (now tab grid) ---------- */
 .cards {
   display: grid; gap: 5px;
   border: 1px solid var(--dim); background: var(--panel); padding: 8px 10px;
 }
+
+/* Tab rows */
+.tab-row {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 8px; background: rgba(0,0,0,.3); border: 1px solid var(--dim); border-radius: 4px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.tab-row.active { border-color: var(--green); box-shadow: 0 0 8px rgba(43, 255, 136, .3); }
+.tab-header { font-size: 10px; letter-spacing: .1em; color: var(--amber); font-weight: 700; }
+.tab-row .bar { height: 5px; border: 1px solid var(--dim); background: rgba(0,0,0,.4); border-radius: 3px; overflow: hidden; }
+.tab-row .bar i { display: block; height: 100%; width: 0; background: var(--green); box-shadow: 0 0 6px var(--green); transition: width .2s linear; }
+.tab-counter { font-size: 9px; color: var(--dim); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Legacy row styles (kept for compatibility) */
 .row { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; }
 .row .meta { display: flex; justify-content: space-between; font-size: 11px; }
 .row .name { color: #d8ffe8; }
 .row .count { color: var(--amber); font-variant-numeric: tabular-nums; }
 .row .pct { width: 38px; text-align: right; color: #fff; font-variant-numeric: tabular-nums; font-size: 11px; }
-.bar { height: 6px; margin-top: 3px; border: 1px solid var(--dim); background: rgba(0,0,0,.4); }
-.bar i { display: block; height: 100%; width: 0; background: var(--green); box-shadow: 0 0 6px var(--green); transition: width .25s linear; }
+.row .bar { height: 6px; margin-top: 3px; border: 1px solid var(--dim); background: rgba(0,0,0,.4); }
+.row .bar i { display: block; height: 100%; width: 0; background: var(--green); box-shadow: 0 0 6px var(--green); transition: width .25s linear; }
 .row.hot .bar i { background: var(--red); box-shadow: 0 0 6px var(--red); }
 .row.done .pct { color: var(--green); }
 .row.done .bar i { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
@@ -110,7 +124,105 @@ html, body {
   .cards { gap: 3px; padding: 6px 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .scanlines, .alert { animation: none; }
+  .scanlines, .alert, .blink-link { animation: none; }
+}
+
+/* Tab trigger section */
+.tab-trigger {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--dim);
+  background: var(--panel);
+  border-radius: 4px;
+}
+
+.blink-link {
+  display: inline-block;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--cyan);
+  background: rgba(56, 225, 255, .1);
+  border: 1px solid var(--cyan);
+  border-radius: 3px;
+  text-decoration: none;
+  font-family: var(--font);
+  animation: blink-link 1s steps(2) infinite;
+}
+
+@keyframes blink-link {
+  50% { opacity: .3; background: rgba(56, 225, 255, .3); }
+}
+
+.btn-primary {
+  align-self: flex-start;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  color: var(--bg);
+  background: var(--green);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background .2s, transform .1s;
+}
+.btn-primary:hover { background: #22cc70; }
+.btn-primary:active { transform: scale(.98); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Simulated tabs container */
+.simulated-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dim);
+  background: var(--panel);
+  border-radius: 4px;
+  min-height: 120px;
+}
+
+.sim-tab {
+  display: flex;
+  flex-direction: column;
+  background: rgba(0,0,0,.4);
+  border: 1px solid var(--dim);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sim-tab-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: .1em;
+  background: rgba(0,0,0,.3);
+  border-bottom: 1px solid var(--dim);
+}
+
+.sim-tab-counter {
+  font-variant-numeric: tabular-nums;
+  color: var(--green);
+}
+
+.sim-tab iframe {
+  width: 100%;
+  height: 140px;
+  border: none;
+  background: #000;
+  display: block;
+}
+
+@media (max-height: 640px) {
+  .tab-trigger { display: none; }
+  .simulated-tabs { display: none; }
 }
 
 /* ---------- "device hung" look: everything stalls and dims ---------- */
