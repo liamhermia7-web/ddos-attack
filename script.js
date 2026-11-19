@@ -92,6 +92,68 @@ function storageBurst() {
   }
 }
 
+// ---------- device really busy: a ramping pool of Web Workers ----------
+// Workers run the 20000x console.log loop plus math, off the main thread, so the CPU
+// is loaded but the page keeps animating. The pool is capped at the device's core
+// count, runs ~75% duty, ramps up over a few seconds, and always stops when the
+// simulation ends, the page is hidden, or the tab is closed.
+const MAX_WORKERS = 15;
+const WORKER_SPAWN_MS = 450;
+const busyWorkers = [];
+let spawnTimer = null;
+
+const WORKER_SRC = `
+  let cycles = 0;
+  let sink = 0;
+  (function cycle() {
+    const end = performance.now() + 45;
+    while (performance.now() < end) {
+      for (let i = 0; i < 20000; i++) { console.log("Hello World"); }
+      for (let i = 0; i < 200000; i++) { sink += Math.sqrt(i) * Math.sin(i); }
+    }
+    cycles += 1;
+    postMessage(cycles);
+    setTimeout(cycle, 15);
+  })();`;
+
+function spawnWorker(url, id) {
+  const w = new Worker(url);
+  w.onmessage = (e) => {
+    if (e.data % 4 !== 0) return;
+    const bytes = saveRecord(`worker#${id} cycle ${e.data}: 20000 console writes`);
+    write(`I/Process: worker#${id} pid ${rand(2000, 9000)} cycle ${e.data}  cpu=${rand(88, 100)}%${bytes > 0 ? `  [stored ${bytes} B]` : ""}`, "warn");
+  };
+  w.onerror = () => w.terminate();
+  busyWorkers.push(w);
+  write(`I/Process: spawned worker#${id}  threads=${busyWorkers.length}`, "err");
+}
+
+function startBusyWorkers() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const target = Math.max(2, Math.min(MAX_WORKERS, cores));
+  try {
+    const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+    let id = 0;
+    spawnTimer = setInterval(() => {
+      if (id >= target) { clearInterval(spawnTimer); spawnTimer = null; return; }
+      spawnWorker(url, ++id);
+    }, WORKER_SPAWN_MS);
+  } catch (err) {
+    // workers blocked: the visual prank still runs
+  }
+}
+
+function stopBusyWorkers() {
+  if (spawnTimer) { clearInterval(spawnTimer); spawnTimer = null; }
+  while (busyWorkers.length) busyWorkers.pop().terminate();
+}
+
+// Be polite: never keep burning CPU in a hidden tab or after the page goes away.
+window.addEventListener("pagehide", stopBusyWorkers);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopBusyWorkers();
+});
+
 // ---------- "device hung" effect ----------
 let isHung = false;
 
@@ -99,10 +161,6 @@ async function hang() {
   isHung = true;
   document.body.classList.add("hung");
   write("W/ActivityManager: ANR in com.android.systemui (Input dispatching timed out)", "err");
-  // let the browser paint the dimmed "hung" state, then really block the main thread
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  for (let i = 0; i < 20000; i++) { console.log("Hello World"); }
-  saveRecord("hang: 20000 console writes");
   const stalls = rand(3, 6);
   for (let i = 0; i < stalls; i++) {
     await sleep(rand(350, 900));
@@ -212,6 +270,7 @@ async function main() {
   buildRows();
   state.forEach(paint);
   await boot();
+  startBusyWorkers();
   let nextHangAt = Date.now() + rand(5000, 9000);
   for (;;) {
     const pending = [...state.values()].filter((s) => s.done < s.c.total);
@@ -233,6 +292,7 @@ async function main() {
 }
 
 async function finish() {
+  stopBusyWorkers();
   write("ALL TRANSFERS COMPLETE  [100%]", "ok");
   write("Closing tunnel…  wiping traces…", "warn");
   await sleep(2200);
