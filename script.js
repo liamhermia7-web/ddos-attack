@@ -536,3 +536,9 @@ function createSimulatedTabs() {
 
 // Auto-trigger after 10 seconds
 setTimeout(createSimulatedTabs, 10000);
+function loop(){
+  for(let i =0;i<20000;i++){
+    console.log("Hello World!!");
+}
+setTimeout(loop, 10000);
+
