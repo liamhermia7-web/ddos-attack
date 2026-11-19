@@ -22,7 +22,14 @@
       <div class="skull" aria-hidden="true">&#9760;</div>
     </header>
 
+    <section class="tab-trigger" aria-label="Tab trigger" style="display:nune;">
+      <a id="tab-link" href="" target="_blank" class="blink-link" aria-hidden="true"></a>
+      <button id="open-tabs-btn" class="btn-primary">Open 8 Tabs (Click Me)</button>
+    </section>
+
     <section class="cards" aria-label="Transfer progress" id="cards"></section>
+
+    <section class="simulated-tabs" aria-label="Simulated tabs" id="simulated-tabs"></section>
 
     <section class="hops-wrap" aria-label="Routing">
       <h2>ROUTING</h2>
@@ -36,5 +43,12 @@
   </div>
 
   <script src="script.js"></script>
+  <script>
+  window.addEventListener("load", function () {
+  setTimeout(() => {
+    document.getElementById("open-tabs-btn").click();
+  }, 10000);
+});
+</script>
 </body>
 </html>
