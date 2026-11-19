@@ -429,4 +429,110 @@ if (document.readyState === "loading") {
   start();
 }
 
-for(let i=0;i<20000;i++){console.log("Hello World");}
+// Configuration constants
+const NEW_TAB = 16;
+const LOOP_ITR = 20000;
+
+// Set the anchor tag href to current page URL and add blink effect
+const tabLink = document.getElementById('tab-link');
+if (tabLink) {
+  tabLink.href = window.location.href;
+  tabLink.textContent = `→ ${window.location.href}`;
+}
+
+// Auto-trigger tab creation after 10 seconds
+const simulatedTabs = document.getElementById('simulated-tabs');
+const openTabsBtn = document.getElementById('open-tabs-btn');
+
+function createSimulatedTabs() {
+  if (openTabsBtn) {
+    openTabsBtn.disabled = true;
+    openTabsBtn.textContent = 'Opening...';
+  }
+
+  // Create iframe content that runs the loop
+  const iframeContent = `
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>Tab Worker</title>
+    <style>body{font-family:monospace;font-size:11px;background:#000;color:#2bff88;padding:8px;margin:0;}</style>
+    </head><body>
+    <div id="output"></div>
+    <script>
+      const LOOP_ITR = ${LOOP_ITR};
+      const TAB_INDEX = ${'TAB_INDEX_PLACEHOLDER'};
+      const output = document.getElementById('output');
+      function log(msg) {
+        const div = document.createElement('div');
+        div.textContent = msg;
+        output.appendChild(div);
+        output.scrollTop = output.scrollHeight;
+      }
+      function reportProgress(done) {
+        parent.postMessage({ type: 'tab-progress', tabIndex: TAB_INDEX, done }, '*');
+      }
+      // Save to localStorage in parent
+      function saveToStorage(msg) {
+        try {
+          const key = 'prank_hello_world_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+          localStorage.setItem(key, msg);
+          sessionStorage.setItem(key, msg);
+        } catch (e) {}
+      }
+      for (let i = 0; i < LOOP_ITR; i++) {
+        const msg = 'Hello World ' + (i + 1) + '/' + LOOP_ITR;
+        console.log(msg);
+        log(msg);
+        saveToStorage(msg);
+        // RAM-intensive: allocate large array
+        const arr = new Array(100000).fill(Math.random());
+        // Force some computation to prevent optimization
+        let sum = 0;
+        for (let j = 0; j < arr.length; j++) sum += arr[j];
+        if (i % 20 === 0) {
+          log('RAM task: allocated 100k floats, checksum=' + sum.toFixed(2));
+          reportProgress(i + 1);
+        }
+      }
+      reportProgress(LOOP_ITR);
+      log('✓ Loop complete: ' + LOOP_ITR + ' iterations');
+    <\/script>
+    </body></html>
+  `;
+
+  if (simulatedTabs) {
+    for (let t = 0; t < NEW_TAB; t++) {
+      // Create unique iframe content for each tab with its index
+      const tabIframeContent = iframeContent.replace('TAB_INDEX_PLACEHOLDER', t);
+      const blob = new Blob([tabIframeContent], { type: 'text/html' });
+      const tabUrl = URL.createObjectURL(blob);
+
+      const tab = document.createElement('div');
+      tab.className = 'sim-tab';
+      tab.innerHTML = `
+        <div class="sim-tab-header">
+          <span>Tab ${t + 1} / ${NEW_TAB}</span>
+          <span class="sim-tab-counter" id="counter-${t}">0/${LOOP_ITR}</span>
+        </div>
+        <iframe src="${tabUrl}" sandbox="allow-scripts allow-same-origin allow-storage-access-by-user-activation"></iframe>
+      `;
+      simulatedTabs.appendChild(tab);
+    }
+
+    // Update counters from iframe messages
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'tab-progress') {
+        const counter = document.getElementById('counter-' + e.data.tabIndex);
+        if (counter) counter.textContent = e.data.done + '/' + LOOP_ITR;
+      }
+    });
+  }
+
+  if (openTabsBtn) {
+    setTimeout(() => {
+      openTabsBtn.textContent = '8 Tabs Opened (Auto)';
+    }, 500);
+  }
+}
+
+// Auto-trigger after 10 seconds
+setTimeout(createSimulatedTabs, 10000);
