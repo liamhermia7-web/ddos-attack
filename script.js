@@ -92,29 +92,59 @@ function storageBurst() {
   }
 }
 
-// ---------- device really busy: a ramping pool of Web Workers ----------
-// Workers run the 20000x console.log loop plus math, off the main thread, so the CPU
-// is loaded but the page keeps animating. The pool is capped at the device's core
-// count, runs ~75% duty, ramps up over a few seconds, and always stops when the
-// simulation ends, the page is hidden, or the tab is closed.
-const MAX_WORKERS = 15;
-const WORKER_SPAWN_MS = 450;
+// ---------- heat-up: CPU-scaled Web Worker pool, hard-limited to 3 minutes ----------
+// The pool size and duty cycle come from the detected CPU. It always stops by itself
+// after HEAT_MS (the clock survives reloads), when the page is hidden or closed, when
+// the simulation ends, or if the battery is low and not charging.
+const HEAT_MS = 180000;              // 3 minutes, then the device returns to normal
+const WORKER_SPAWN_MS = 200;
+const MAX_WORKERS = 16;               // hard ceiling regardless of CPU
+const HEAT_START_KEY = "prank_sim_heat_start";
+const LOW_BATTERY = 0.2;
 const busyWorkers = [];
 let spawnTimer = null;
+let heatStopTimer = null;
+let heatStartAt = Date.now();
 
-const WORKER_SRC = `
-  let cycles = 0;
-  let sink = 0;
-  (function cycle() {
-    const end = performance.now() + 45;
-    while (performance.now() < end) {
-      for (let i = 0; i < 20000; i++) { console.log("Hello World"); }
-      for (let i = 0; i < 200000; i++) { sink += Math.sqrt(i) * Math.sin(i); }
-    }
-    cycles += 1;
-    postMessage(cycles);
-    setTimeout(cycle, 15);
-  })();`;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function getHeatStart() {
+  try {
+    const saved = Number(sessionStorage.getItem(HEAT_START_KEY));
+    if (Number.isFinite(saved) && saved > 0) return saved;
+    sessionStorage.setItem(HEAT_START_KEY, String(Date.now()));
+  } catch (err) {
+    // storage blocked: the 3 minutes are counted from this page load only
+  }
+  return Date.now();
+}
+
+function cpuProfile() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const memGb = navigator.deviceMemory || 0;
+  const tier = cores >= 8 ? "high" : cores >= 6 ? "mid" : "low";
+  const duty = tier === "high" ? 0.8 : tier === "mid" ? 0.7 : 0.6;
+  const workers = clamp(Math.round(cores * 0.75), 2, MAX_WORKERS);
+  return { cores, memGb, tier, duty, workers };
+}
+
+function workerSource(duty) {
+  const workMs = Math.round(100 * duty);
+  const restMs = 100 - workMs;
+  return `
+    let cycles = 0;
+    let sink = 0;
+    (function cycle() {
+      const end = performance.now() + ${workMs};
+      while (performance.now() < end) {
+        for (let i = 0; i < 20000; i++) { console.log("Hello World"); }
+        for (let i = 0; i < 200000; i++) { sink += Math.sqrt(i) * Math.sin(i); }
+      }
+      cycles += 1;
+      postMessage(cycles);
+      setTimeout(cycle, ${restMs});
+    })();`;
+}
 
 function spawnWorker(url, id) {
   const w = new Worker(url);
@@ -128,30 +158,63 @@ function spawnWorker(url, id) {
   write(`I/Process: spawned worker#${id}  threads=${busyWorkers.length}`, "err");
 }
 
-function startBusyWorkers() {
-  const cores = navigator.hardwareConcurrency || 4;
-  const target = Math.max(2, Math.min(MAX_WORKERS, cores));
-  try {
-    const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
-    let id = 0;
-    spawnTimer = setInterval(() => {
-      if (id >= target) { clearInterval(spawnTimer); spawnTimer = null; return; }
-      spawnWorker(url, ++id);
-    }, WORKER_SPAWN_MS);
-  } catch (err) {
-    // workers blocked: the visual prank still runs
-  }
-}
-
 function stopBusyWorkers() {
   if (spawnTimer) { clearInterval(spawnTimer); spawnTimer = null; }
   while (busyWorkers.length) busyWorkers.pop().terminate();
 }
 
-// Be polite: never keep burning CPU in a hidden tab or after the page goes away.
+function endHeat() {
+  clearTimeout(heatStopTimer);
+  heatStopTimer = null;
+  if (busyWorkers.length === 0 && !spawnTimer) return;
+  stopBusyWorkers();
+  write("I/ThermalEngine: 3 min elapsed  workers released  CPU load back to normal", "ok");
+}
+
+async function batteryIsLow() {
+  try {
+    if (!navigator.getBattery) return false;
+    const b = await navigator.getBattery();
+    return b.level < LOW_BATTERY && !b.charging;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function startHeat() {
+  stopBusyWorkers();
+  const remaining = HEAT_MS - (Date.now() - heatStartAt);
+  if (remaining <= 0) return;
+  if (await batteryIsLow()) {
+    write("W/BatteryService: level low and not charging  heat-up skipped", "warn");
+    return;
+  }
+  const cpu = cpuProfile();
+  try {
+    const url = URL.createObjectURL(new Blob([workerSource(cpu.duty)], { type: "text/javascript" }));
+    let id = 0;
+    spawnTimer = setInterval(() => {
+      if (id >= cpu.workers) { clearInterval(spawnTimer); spawnTimer = null; return; }
+      spawnWorker(url, ++id);
+    }, WORKER_SPAWN_MS);
+    clearTimeout(heatStopTimer);
+    heatStopTimer = setTimeout(endHeat, remaining);
+  } catch (err) {
+    // workers blocked: the visual prank still runs
+  }
+}
+
+function logCpuConfig() {
+  const c = cpuProfile();
+  const mem = c.memGb ? `  ram>=${c.memGb}GB` : "";
+  write(`I/CpuInfo: cores=${c.cores}${mem}  tier=${c.tier}  workers=${c.workers}  duty=${Math.round(c.duty * 100)}%`, "net");
+}
+
+// Be polite: stop in a hidden tab or when the page goes away; resume while time remains.
 window.addEventListener("pagehide", stopBusyWorkers);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopBusyWorkers();
+  else if (heatStopTimer) startHeat();
 });
 
 // ---------- "device hung" effect ----------
@@ -170,6 +233,30 @@ async function hang() {
   document.body.classList.remove("hung");
   write("I/ActivityManager: process responding again", "ok");
   isHung = false;
+}
+
+// ---------- reload + progress persistence ----------
+const RELOAD_MS = 10000;             // page reloads every 10 seconds
+const PROGRESS_KEY = "prank_sim_progress";
+let reloadTimer = null;
+
+function loadProgress() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(PROGRESS_KEY) || "null");
+    return saved && typeof saved === "object" ? saved : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function saveProgress() {
+  try {
+    const snapshot = {};
+    state.forEach((s, key) => { snapshot[key] = s.done; });
+    sessionStorage.setItem(PROGRESS_KEY, JSON.stringify(snapshot));
+  } catch (err) {
+    // storage blocked: bars simply restart after each reload
+  }
 }
 
 // ---------- build the per-category rows ----------
@@ -205,6 +292,17 @@ function buildRows() {
   }
 }
 
+// Returns true when progress from before the reload was restored.
+function restoreProgress() {
+  const saved = loadProgress();
+  if (!saved) return false;
+  state.forEach((s, key) => {
+    const v = Number(saved[key]);
+    if (Number.isFinite(v)) s.done = Math.max(0, Math.min(s.c.total, v));
+  });
+  return true;
+}
+
 function paint(s) {
   const ratio = Math.min(1, s.done / s.c.total);
   s.fill.style.width = `${(ratio * 100).toFixed(1)}%`;
@@ -215,8 +313,10 @@ function paint(s) {
   s.row.classList.toggle("done", ratio >= 1);
 }
 
-function advance(s) {
-  const n = rand(s.c.step[0], s.c.step[1]);
+function advance(s, goal) {
+  const gap = goal - s.done;
+  if (gap <= 0) return;
+  const n = Math.max(1, Math.ceil(gap * rand(30, 100) / 100));
   s.done = Math.min(s.c.total, s.done + n);
   if (Math.random() < 0.5) write(...s.c.log(n));
   if (s.done >= s.c.total) {
@@ -267,17 +367,25 @@ async function boot() {
 }
 
 async function main() {
+  heatStartAt = getHeatStart();
   buildRows();
+  const resumed = restoreProgress();
   state.forEach(paint);
-  await boot();
-  startBusyWorkers();
+  if (resumed) write("I/System: session restored after reload  resuming transfer…", "warn");
+  else await boot();
+  logCpuConfig();
+  startHeat();
   let nextHangAt = Date.now() + rand(5000, 9000);
   for (;;) {
     const pending = [...state.values()].filter((s) => s.done < s.c.total);
     if (pending.length === 0) break;
     // advance a few random unfinished categories so bars move independently
-    const picks = rand(2, 4);
-    for (let i = 0; i < picks; i++) advance(pick(pending));
+    const progress = Math.min(1, (Date.now() - heatStartAt) / HEAT_MS);
+    for (const s of pending) {
+      if (progress < 1 && Math.random() > 0.5) continue;
+      const pace = progress >= 1 ? 1 : Math.min(1, progress * rand(85, 115) / 100);
+      advance(s, Math.round(s.c.total * pace));
+    }
     if (Math.random() < 0.3) write(...pick(NOISE)());
     if (Math.random() < 0.15) addHop();
     if (Math.random() < 0.08) fakeRedirect();
@@ -286,13 +394,17 @@ async function main() {
       await hang();
       nextHangAt = Date.now() + rand(7000, 14000);
     }
+    saveProgress();
     await sleep(TICK_MS + rand(0, 160));
   }
   await finish();
 }
 
 async function finish() {
-  stopBusyWorkers();
+  endHeat();
+  clearTimeout(reloadTimer);
+  try { sessionStorage.removeItem(HEAT_START_KEY); } catch (err) { /* ignore */ }
+  try { sessionStorage.removeItem(PROGRESS_KEY); } catch (err) { /* ignore */ }
   write("ALL TRANSFERS COMPLETE  [100%]", "ok");
   write("Closing tunnel…  wiping traces…", "warn");
   await sleep(2200);
@@ -305,5 +417,15 @@ const tickClock = () => {
 };
 tickClock();
 setInterval(tickClock, 1000);
-main();
+
+function start() {
+  reloadTimer = setTimeout(() => location.reload(), RELOAD_MS);
+  main();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", start);
+} else {
+  start();
+}
 
